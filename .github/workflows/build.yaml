@@ -115,5 +115,7 @@ jobs:
       run: |
         release_url="https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION_NAME }}"
         curl -H "Content-Type: application/json" -X POST -d "{\"content\": \"New release v${{ env.VERSION_NAME }} is available! [View Release]($release_url)\"}" ${{ secrets.DISCORD_WEBHOOK_URL }}
+        curl -H "Content-Type: application/json" -X POST -d "{\"content\": \"New release v${{ env.VERSION_NAME }} is available! [View Release]($release_url)\"}" ${{ secrets.DISCORD_WEBHOOK_URL2 }}
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        DISCORD_WEBHOOK_URL2: ${{ secrets.DISCORD_WEBHOOK_URL2 }}
