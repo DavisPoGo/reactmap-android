@@ -1,0 +1,119 @@
+name: Build and Release APK
+
+on:
+  push:
+    branches:
+      - master # Change this to your main branch
+  workflow_dispatch:
+
+
+jobs:
+  check_secrets:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check GitHub Secrets
+      run: |
+        if [ -z "${{ secrets.KEYSTORE_FILE }}" ]; then
+          echo "Missing KEYSTORE_FILE secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+          echo "Missing KEYSTORE_PASSWORD secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.KEY_ALIAS }}" ]; then
+          echo "Missing KEY_ALIAS secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.KEY_PASSWORD }}" ]; then
+          echo "Missing KEY_PASSWORD secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.MAP_URL }}" ]; then
+          echo "Missing MAP_URL secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.GITHUB_TOKEN }}" ]; then
+          echo "Missing GITHUB_TOKEN secret"
+          exit 1
+        fi
+        if [ -z "${{ secrets.APP_NAME }}" ]; then
+          echo "Missing APP_NAME secret"
+          exit 1
+        fi
+
+  build:
+    needs: check_secrets
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Git Submodule Update
+      run: |
+        git pull --recurse-submodules
+        git submodule update --init --recursive
+
+    - name: Set up JDK
+      uses: actions/setup-java@v2
+      with:
+        distribution: 'adopt'
+        java-version: '17'
+   
+    - name: Restore keystore from secret
+      run: echo "${{ secrets.KEYSTORE_FILE }}" | tr -d '\n' | base64 -d > /home/runner/work/reactmap-android/reactmap-android/keystore.jks
+    
+    - name: Check if keystore is available
+      run: ls -a /home/runner/work/reactmap-android/reactmap-android/keystore.jks
+
+    - name: Make Gradlew executable
+      run: chmod +x ./gradlew
+    
+    - name: Extract versionName from gradle.properties
+      id: extract_version
+      run: echo "VERSION_NAME=$(grep 'reactmap.versionName' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')" >> $GITHUB_ENV
+
+    - name: Set Package Name
+      run: echo "PACKAGE_NAME=${{ secrets.PACKAGE_NAME || 'be.mygod.reactmap' }}" >> $GITHUB_ENV
+
+    - name: Sign APK and create release
+      run: |
+        cd /home/runner/work/reactmap-android/reactmap-android/
+        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=/home/runner/work/reactmap-android/reactmap-android/keystore.jks -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} -Preactmap.defaultDomain=${{ secrets.MAP_URL }} -Preactmap.packageName=${{ env.PACKAGE_NAME }} -Preactmap.appName=${{ secrets.APP_NAME }}
+
+    - name: List APK directory - apk
+      run: ls -R /home/runner/work/reactmap-android/reactmap-android/app/build/outputs/apk/
+      
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4.6.2
+      with:
+        name: Reactmap-android
+        path: /home/runner/work/reactmap-android/reactmap-android/app/build/outputs/apk/release/app-release.apk
+
+    - name: Rename all APK variant files
+      run: |
+        cd /home/runner/work/reactmap-android/reactmap-android/app/build/outputs/apk/release
+        for f in app-*-release.apk; do
+          new_name="${f/app/${{ secrets.APP_NAME }}-v${{ env.VERSION_NAME }}}"
+          mv "$f" "$new_name"
+        done
+
+    - name: Release with ncipollo/release-action
+      id: release
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: /home/runner/work/reactmap-android/reactmap-android/app/build/outputs/apk/release/${{ secrets.APP_NAME }}-v${{ env.VERSION_NAME }}-*-release.apk
+        token: ${{ secrets.GITHUB_TOKEN }}
+        generateReleaseNotes: true
+        skipIfReleaseExists: true
+        tag: v${{ env.VERSION_NAME }}
+
+    - name: Send Discord webhook notification
+      if: env.DISCORD_WEBHOOK_URL && steps.release.outputs.release_created == 'true'
+      run: |
+        release_url="https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION_NAME }}"
+        curl -H "Content-Type: application/json" -X POST -d "{\"content\": \"New release v${{ env.VERSION_NAME }} is available! [View Release]($release_url)\"}" ${{ secrets.DISCORD_WEBHOOK_URL }}
+      env:
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
